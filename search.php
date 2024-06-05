@@ -5,55 +5,49 @@ $password = "";
 $database = "searchbar";
 $conn = mysqli_connect($server, $username, $password, $database) or die("Connection failed: " . mysqli_connect_error());
 
-$search_query = $_GET['prayer_time'] ?? '';
-$prayer_times = [];
-
-if ($search_query) {
-    $stmt = $conn->prepare("SELECT pt.*, c.name AS city_name, co.name AS country_name 
-                            FROM prayer_times pt 
-                            INNER JOIN cities c ON pt.city_id = c.id 
-                            INNER JOIN countries co ON c.country_id = co.id 
-                            WHERE CONCAT(c.name, ', ', co.name) LIKE ?");
-    $search_query_param = '%' . $search_query . '%';
-    $stmt->bind_param('s', $search_query_param);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $prayer_times = $result->fetch_all(MYSQLI_ASSOC);
-}
-
 $suggestions = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $entityBody = file_get_contents('php://input');
-    $searchQuery = json_decode($entityBody, true);
-    $searchQuery = $searchQuery['searchQuery'];
+    $request = json_decode($entityBody, true);
+    $searchQuery = $request['searchQuery'] ?? '';
+    $type = $request['type'] ?? 'suggestion';
 
-    $stmt = $conn->prepare("SELECT c.name AS city_name, co.name AS country_name 
-                            FROM cities c 
-                            INNER JOIN countries co ON c.country_id = co.id 
-                            WHERE c.name LIKE ? OR co.name LIKE ?");
-    $searchQueryParam = '%' . $searchQuery . '%';
-    $stmt->bind_param('ss', $searchQueryParam, $searchQueryParam);
+    if ($type === 'suggestion') {
+        $stmt = $conn->prepare("SELECT c.name AS city_name, co.name AS country_name
+            FROM cities c
+            INNER JOIN countries co ON c.country_id = co.id
+            WHERE c.name LIKE ?");
+        $searchQueryParam = "%" . $searchQuery . "%";
+        $stmt->bind_param('s', $searchQueryParam);
+    } else {
+        $stmt = $conn->prepare("SELECT c.name AS city_name, co.name AS country_name
+            FROM cities c
+            INNER JOIN countries co ON c.country_id = co.id
+            WHERE c.name = ?");
+        $stmt->bind_param('s', $searchQuery);
+    }
+
     $stmt->execute();
     $result = $stmt->get_result();
 
-    while ($row = $result->fetch_assoc()) {
-        $suggestions[] = [
-            'city' => $row['city_name'],
-        ];
-        $suggestions[] = [
-            'city' => $row['city_name'],
-            'country' => $row['country_name'],
-        ];
+    if ($result->num_rows > 0) {
+        while ($row = $result->fetch_assoc()) {
+            $suggestions[] = [
+                'city' => $row['city_name'],
+                'country' => $row['country_name'],
+            ];
+        }
     }
 
+    $stmt->close();
     echo json_encode($suggestions);
     exit;
 }
 
-function usfirst($str) {
-    return ucwords(strtolower($str));
-}
+$conn->close();
 ?>
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,8 +86,8 @@ function usfirst($str) {
             border-radius: 4px;
             font-size: 16px;
             margin-bottom: 10px;
-            margin-left: -10px;
             border: 1px solid lightskyblue;
+            margin-left: -10px;
         }
         #search-form button {
             background-color: #007bff;
@@ -130,26 +124,13 @@ function usfirst($str) {
         .prayer-card li {
             font-size: 16px;
             margin-bottom: 8px;
-        }
-        .prayer-card li {
-            font-size: 16px;
-            margin-bottom: 8px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
         .prayer-card li span:last-child {
-            flex-shrink: 0;
-            width: 60px;
-            text-align: center;
-        }
-
-        .prayer-card li span:last-child {
             text-align: right;
-        }
-        .prayer-card li span:nth-child(2) {
-            margin-left: auto;
         }
     </style>
 </head>
@@ -166,23 +147,6 @@ function usfirst($str) {
 
 <div class="card" id="prayer-times-card">
     <div id="prayer-times">
-        <?php if ($prayer_times): ?>
-            <h2>Prayer Times for Searched Location:</h2>
-            <?php foreach ($prayer_times as $prayer): ?>
-                <div class="prayer-card">
-                    <h3><?= usfirst(htmlspecialchars($prayer['city_name'])) ?>, <?= usfirst(htmlspecialchars($prayer['country_name'])) ?>:</h3>
-                    <ul>
-                        <li><strong>Fajr:</strong> <?= date('h:i A', strtotime($prayer['fajr'])) ?></li>
-                        <li><strong>Dhuhr:</strong><?= date('h:i A', strtotime($prayer['dhuhr'])) ?></li>
-                        <li><strong>Asr:</strong><?= date('h:i A', strtotime($prayer['asr'])) ?></li>
-                        <li><strong>Maghrib:</strong><?= date('h:i A', strtotime($prayer['maghrib'])) ?></li>
-                        <li><strong>Isha:</strong><?= date('h:i A', strtotime($prayer['isha'])) ?></li>
-                    </ul>
-                </div>
-            <?php endforeach; ?>
-        <?php elseif ($search_query): ?>
-            <p>No prayer times found for "<?= htmlspecialchars($search_query) ?>".</p>
-            <?php endif; ?>
     </div>
 </div>
 
@@ -194,24 +158,16 @@ function usfirst($str) {
             return;
         }
 
-        const xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    try {
-                        const suggestions = JSON.parse(xhr.responseText);
-                        updateSuggestions(suggestions);
-                    } catch (error) {
-                        console.error('Error parsing JSON:', error);
-                    }
-                } else {
-                    console.error('Error:', xhr.status);
-                }
-            }
-        };
-        xhr.open('POST', 'search.php', true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(JSON.stringify({ searchQuery }));
+        fetch('', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ searchQuery, type: 'suggestion' }),
+        })
+        .then(response => response.json())
+        .then(data => updateSuggestions(data))
+        .catch(error => console.error('Error fetching suggestions:', error));
     });
 
     document.getElementById('search_query').addEventListener('change', function() {
@@ -226,24 +182,112 @@ function usfirst($str) {
         if (suggestions.length > 0) {
             suggestions.forEach(suggestion => {
                 const option = document.createElement('option');
-                if (suggestion.country) {
-                    option.textContent = suggestion.city + ', ' + suggestion.country;
-                } else {
-                    option.textContent = suggestion.city;
-                }
+                option.textContent = `${suggestion.city}, ${suggestion.country}`;
                 datalist.appendChild(option);
             });
         }
     }
+
     document.getElementById('search-form').addEventListener('submit', function(event) {
         event.preventDefault();
         const searchQuery = document.getElementById('search_query').value;
-        const url = new URL(window.location);
-        url.searchParams.set('prayer_time', searchQuery);
+
+        const [city, country] = searchQuery.split(',').map(str => str.trim());
+
+        fetchPrayerTimes(city, country);
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('page', city+'-prayer-times');
         window.history.pushState({}, '', url);
-        this.submit();
+    });
+
+    function fetchPrayerTimes(city, country = '') {
+        if (!country) {
+            country = '';
+        }
+
+        fetch('', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ searchQuery: city, type: 'validation' }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.length > 0) {
+                let url = `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}&method=2`;
+                fetch(url)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.code === 200 && data.data) {
+                            displayPrayerTimes(data, city, country);
+                        } else {
+                            document.getElementById('prayer-times').innerHTML = `<p>No prayer times found for "${city}, ${country}".</p>`;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching prayer times:', error);
+                        document.getElementById('prayer-times').innerHTML = `<p>No prayer times found for "${city}, ${country}".</p>`;
+                    });
+            } else {
+                document.getElementById('prayer-times').innerHTML = `<p>No prayer times found for "${city}, ${country}".</p>`;
+            }
+        })
+        .catch(error => {
+            console.error('Error validating city:', error);
+            document.getElementById('prayer-times').innerHTML = `<p>Error validating city "${city}".</p>`;
+        });
+    }
+
+    function displayPrayerTimes(data, city, country) {
+        const prayerTimes = data.data.timings;
+        const currentDate = new Date().toLocaleDateString('en-US', { timeZone: data.data.meta.timezone });
+        const currentTime = new Date().toLocaleTimeString('en-US', { timeZone: data.data.meta.timezone });
+
+        const capitalize = (str) => {
+            return str.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+        };
+
+        const capitalizedCity = capitalize(city);
+        const capitalizedCountry = country ? capitalize(country) : '';
+
+        const prayerTimesContainer = document.getElementById('prayer-times');
+        prayerTimesContainer.innerHTML = `
+            <h2>Prayer Times for ${capitalizedCity}${capitalizedCountry ? ', ' + capitalizedCountry : ''}:</h2>
+            <div class="prayer-card">
+                <h3>${capitalizedCity}${capitalizedCountry ? ', ' + capitalizedCountry : ''}:</h3>
+                <p>Date: ${currentDate}</p>
+                <p>Current Time: ${currentTime}</p>
+                <ul>
+                    <li><strong>Fajr:</strong> ${convertTo12HourFormat(prayerTimes.Fajr)}</li>
+                    <li><strong>Dhuhr:</strong> ${convertTo12HourFormat(prayerTimes.Dhuhr)}</li>
+                    <li><strong>Asr:</strong> ${convertTo12HourFormat(prayerTimes.Asr)}</li>
+                    <li><strong>Maghrib:</strong> ${convertTo12HourFormat(prayerTimes.Maghrib)}</li>
+                    <li><strong>Isha:</strong> ${convertTo12HourFormat(prayerTimes.Isha)}</li>
+                </ul>
+            </div>
+        `;
+    }
+
+    function convertTo12HourFormat(time) {
+        const [hours, minutes] = time.split(':');
+        const hoursInt = parseInt(hours);
+        const period = hoursInt >= 12 ? 'PM' : 'AM';
+        const hours12 = hoursInt % 12 || 12;
+        return `${hours12}:${minutes} ${period}`;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const city = urlParams.get('page');
+        if (city) {
+            const cityName = city.split('-prayer-times').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+            
+            document.getElementById('search_query').value = cityName;
+            fetchPrayerTimes(cityName);
+        }
     });
 </script>
-
 </body>
 </html>
